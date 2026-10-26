@@ -1,0 +1,111 @@
+@import "tailwindcss";
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0a0a1a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #4a3a2a;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #6a5a4a;
+}
+
+/* Smooth scroll behavior */
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: #0a0a1a;
+  overflow: hidden;
+}
+
+/* Selection color */
+::selection {
+  background-color: rgba(234, 88, 12, 0.4);
+  color: white;
+}
+
+/* Canvas pixel-perfect rendering */
+canvas {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+/* PS1-style text shadow for headings */
+.ps1-text {
+  text-shadow: 2px 2px 0 #000, -1px -1px 0 #000;
+}
+
+/* Animation for section transitions */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 10px rgba(234, 88, 12, 0.3); }
+  50% { box-shadow: 0 0 25px rgba(234, 88, 12, 0.6); }
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-2px); }
+  75% { transform: translateX(2px); }
+}
+
+.animate-fadeInUp {
+  animation: fadeInUp 0.5s ease-out;
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s infinite;
+}
+
+.animate-shake {
+  animation: shake 0.3s ease-in-out;
+}
+
+/* Mobile menu overlay */
+@media (max-width: 1023px) {
+  nav {
+    box-shadow: 4px 0 20px rgba(0, 0, 0, 0.5);
+  }
+}
+
+/* Scanline effect for canvas (optional PS1 feel) */
+.scanlines::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.05) 2px,
+    rgba(0, 0, 0, 0.05) 4px
+  );
+  pointer-events: none;
+}
+
+/* CRT glow effect */
+.crt-glow {
+  box-shadow: 
+    0 0 10px rgba(255, 136, 0, 0.2),
+    0 0 30px rgba(255, 136, 0, 0.1),
+    inset 0 0 20px rgba(0, 0, 0, 0.3);
+}
