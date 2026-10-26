@@ -1,1 +1,59 @@
 @import "tailwindcss";
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #1a1a2e;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #4a4a6a;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #6a6a8a;
+}
+
+/* Smooth scroll behavior */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Selection color */
+::selection {
+  background-color: rgba(234, 88, 12, 0.3);
+  color: white;
+}
+
+/* Code blocks */
+pre {
+  scrollbar-width: thin;
+  scrollbar-color: #4a4a6a #1a1a2e;
+}
+
+/* Animation for section transitions */
+section {
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Mobile menu overlay */
+@media (max-width: 1023px) {
+  nav {
+    box-shadow: 4px 0 20px rgba(0, 0, 0, 0.5);
+  }
+}
