@@ -1,5 +1,4 @@
-// Rail Mayhem: Depot to Depot — Game Engine
-// PS1-style 2D side-scroller with train physics
+// Rail Mayhem: Depot to Depot — simulation and progression
 
 // ============ TYPES ============
 export type GameScreen = 'menu' | 'depot' | 'playing' | 'casino' | 'results';
@@ -82,7 +81,7 @@ export interface GameState {
   screen: GameScreen;
   // Train
   trainX: number;
-  trainSpeed: number; // pixels per second
+  trainSpeed: number; // km/h
   maxSpeed: number;
   acceleration: number;
   braking: number;
@@ -399,17 +398,16 @@ export function update(state: GameState, dt: number): void {
     }
   }
 
-  // Act progression
-  const prevAct = state.act;
-  if (state.gameTime > 60 && state.act === 1) {
+  // Train speed is displayed in km/h, while route distance is measured in meters.
+  if (state.distanceTraveled >= state.trackLength / 3 && state.act === 1) {
     state.act = 2;
     state.actTransition = 3;
     state.actTransitionText = 'АКТ 2: ПУШКА АКТИВИРОВАНА!';
     addShake(state, 10, 1);
-  } else if (state.gameTime > 150 && state.act === 2) {
+  } else if (state.distanceTraveled >= state.trackLength * 2 / 3 && state.act === 2) {
     state.act = 3;
     state.actTransition = 3;
-    state.actTransitionText = 'АКТ 3: ФИНАЛЬНЫЙ БОСС!';
+    state.actTransitionText = 'АКТ 3: ФИНАЛЬНАЯ ВОЛНА!';
     addShake(state, 15, 1.5);
   }
 
@@ -417,7 +415,7 @@ export function update(state: GameState, dt: number): void {
   updateTrain(state, dt);
 
   // Distance
-  state.distanceTraveled += state.trainSpeed * dt;
+  state.distanceTraveled += (state.trainSpeed / 3.6) * dt;
 
   // Background scrolling
   const speed = state.trainSpeed;
@@ -1794,7 +1792,15 @@ export interface CasinoResult {
   symbols?: string[];
 }
 
+function validateBet(state: GameState, bet: number): void {
+  if (!Number.isSafeInteger(bet) || bet <= 0 || bet > Math.floor(state.coins * 0.3)) {
+    throw new RangeError('Ставка должна быть целым числом и не превышать 30% монет.');
+  }
+}
+
 export function playSlots(state: GameState, bet: number): CasinoResult {
+  validateBet(state, bet);
+
   const symbols = ['🚂', '🚃', '💰', '🎰', '⭐', '🔥'];
   const result = [
     symbols[Math.floor(Math.random() * symbols.length)],
@@ -1802,30 +1808,27 @@ export function playSlots(state: GameState, bet: number): CasinoResult {
     symbols[Math.floor(Math.random() * symbols.length)],
   ];
 
-  state.pityCounter++;
-
   // Check win
   if (result[0] === result[1] && result[1] === result[2]) {
-    // Jackpot!
     state.pityCounter = 0;
-    const winAmount = bet * 50;
+    const winAmount = bet * 49;
     state.coins += winAmount;
     state.casinoWins++;
     return { won: true, amount: winAmount, message: 'ДЖЕКПОТ!!! ×50!', symbols: result };
   }
 
-  if (result[0] === result[1] || result[1] === result[2]) {
-    // Small win
-    const winAmount = bet * 2;
+  if (new Set(result).size === 2) {
+    state.pityCounter = 0;
+    const winAmount = bet;
     state.coins += winAmount;
     state.casinoWins++;
     return { won: true, amount: winAmount, message: 'Малый выигрыш! ×2', symbols: result };
   }
 
-  // Pity system
+  state.pityCounter++;
   if (state.pityCounter >= 10) {
     state.pityCounter = 0;
-    const winAmount = bet * 3;
+    const winAmount = bet * 2;
     state.coins += winAmount;
     state.casinoWins++;
     return { won: true, amount: winAmount, message: 'УДАЧА ПРИШЛА! (pity) ×3', symbols: result };
@@ -1837,13 +1840,15 @@ export function playSlots(state: GameState, bet: number): CasinoResult {
 }
 
 export function playRoulette(state: GameState, bet: number): CasinoResult {
+  validateBet(state, bet);
+
   const sectors = [
-    { mult: 0, chance: 0.35, msg: '×0 — Пусто!' },
-    { mult: 1.5, chance: 0.25, msg: '×1.5 — Неплохо!' },
-    { mult: 3, chance: 0.20, msg: '×3 — Отлично!' },
-    { mult: 10, chance: 0.05, msg: '×10 — ДЖЕКПОТ!' },
-    { mult: 2, chance: 0.10, msg: '×2 + БОНУС!' },
-    { mult: -0.5, chance: 0.05, msg: 'ДЕБАФФ! -50%' },
+    { profit: -1, chance: 0.35, msg: '×0 — Пусто!' },
+    { profit: 0.5, chance: 0.25, msg: '×1.5 — Неплохо!' },
+    { profit: 2, chance: 0.20, msg: '×3 — Отлично!' },
+    { profit: 9, chance: 0.05, msg: '×10 — ДЖЕКПОТ!' },
+    { profit: 1, chance: 0.10, msg: '×2 + БОНУС!' },
+    { profit: -0.5, chance: 0.05, msg: 'ДЕБАФФ! -50%' },
   ];
 
   const roll = Math.random();
@@ -1851,7 +1856,7 @@ export function playRoulette(state: GameState, bet: number): CasinoResult {
   for (const sector of sectors) {
     cumulative += sector.chance;
     if (roll <= cumulative) {
-      const result = Math.floor(bet * sector.mult);
+      const result = Math.floor(bet * sector.profit);
       state.coins += result;
       if (result > 0) state.casinoWins++;
       else state.casinoLosses++;

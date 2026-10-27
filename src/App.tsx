@@ -1,22 +1,24 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import {
-  createInitialState, initRun, update, render,
+  createInitialState, initRun, update,
   CANVAS_W, CANVAS_H,
   playSlots, playRoulette,
   SHOP_ITEMS,
   type GameState, type CasinoResult,
 } from './game/engine';
 import { soundManager } from './game/sound';
+import type { GameRenderer3D } from './game/renderer3d';
 
 function App() {
   const [gameState] = useState<GameState>(() => createInitialState());
   const [screen, setScreen] = useState<GameState['screen']>('menu');
+  const [renderError, setRenderError] = useState<string | null>(null);
   const [hud, setHud] = useState({
     speed: 0, hp: 100, passengers: 0, coins: 0,
     wave: 0, act: 1, distance: 0, time: 0, enemies: 0,
-    turretReady: true, gameOver: false,
+    turretReady: true, gameOver: false, aimX: CANVAS_W / 2, aimY: CANVAS_H / 2,
   });
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const worldRef = useRef<HTMLDivElement>(null);
   const animRef = useRef<number>(0);
   const lastTimeRef = useRef<number>(0);
 
@@ -29,72 +31,80 @@ function App() {
   useEffect(() => {
     if (screen !== 'playing') return;
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    const host = worldRef.current;
+    if (!host) return;
+    let disposed = false;
+    let world: GameRenderer3D | undefined;
+    setRenderError(null);
 
-    ctx.imageSmoothingEnabled = false;
-    soundManager.init();
+    const start = async () => {
+      try {
+        const { GameRenderer3D } = await import('./game/renderer3d');
+        if (disposed) return;
+        world = new GameRenderer3D(host);
+        soundManager.init();
 
-    let prevTurretReload = gameState.turretMaxReload;
+        let prevTurretReload = gameState.turretMaxReload;
+        const loop = (time: number) => {
+          const dt = Math.min(0.05, (time - lastTimeRef.current) / 1000);
+          lastTimeRef.current = time;
 
-    const loop = (time: number) => {
-      const dt = Math.min(0.05, (time - lastTimeRef.current) / 1000);
-      lastTimeRef.current = time;
+          if (gameState.turretReload > prevTurretReload * 0.5 && prevTurretReload <= 0.1) {
+            soundManager.shoot();
+          }
+          prevTurretReload = gameState.turretReload;
+          update(gameState, dt);
+          world?.render(gameState);
 
-      // Detect shooting (turret reload was reset)
-      if (gameState.turretReload > prevTurretReload * 0.5 && prevTurretReload <= 0.1) {
-        soundManager.shoot();
+          const totalPassengers = gameState.wagons
+            .filter(w => !w.detached)
+            .reduce((sum, wagon) => sum + wagon.passengers, 0);
+          const totalHp = gameState.wagons
+            .filter(w => !w.detached)
+            .reduce((sum, wagon) => sum + wagon.hp, 0);
+          const maxHp = gameState.wagons
+            .filter(w => !w.detached)
+            .reduce((sum, wagon) => sum + wagon.maxHp, 0);
+
+          setHud({
+            speed: Math.round(gameState.trainSpeed),
+            hp: maxHp > 0 ? Math.round((totalHp / maxHp) * 100) : 0,
+            passengers: totalPassengers,
+            coins: gameState.coins,
+            wave: gameState.waveNumber,
+            act: gameState.act,
+            distance: Math.round(gameState.distanceTraveled),
+            time: Math.round(gameState.gameTime),
+            enemies: gameState.enemiesKilled,
+            turretReady: gameState.turretReload <= 0,
+            gameOver: gameState.gameOver,
+            aimX: gameState.mouseX,
+            aimY: gameState.mouseY,
+          });
+
+          if (gameState.gameOver && gameState.gameOverTimer > 3) {
+            setScreen('results');
+          }
+
+          animRef.current = requestAnimationFrame(loop);
+        };
+
+        lastTimeRef.current = performance.now();
+        animRef.current = requestAnimationFrame(loop);
+      } catch (error) {
+        if (!disposed) {
+          setRenderError(error instanceof Error ? error.message : String(error));
+        }
       }
-      prevTurretReload = gameState.turretReload;
-
-      const prevEnemies = gameState.enemies.length;
-      update(gameState, dt);
-      render(ctx, gameState);
-
-      // Sound effects based on events
-      if (gameState.enemiesKilled > 0 && gameState.enemies.length < prevEnemies) {
-        // Enemy killed
-      }
-
-      // Update HUD
-      const totalPassengers = gameState.wagons
-        .filter(w => !w.detached)
-        .reduce((s, w) => s + w.passengers, 0);
-      const totalHp = gameState.wagons
-        .filter(w => !w.detached)
-        .reduce((s, w) => s + w.hp, 0);
-      const maxHp = gameState.wagons
-        .filter(w => !w.detached)
-        .reduce((s, w) => s + w.maxHp, 0);
-
-      setHud({
-        speed: Math.round(gameState.trainSpeed),
-        hp: maxHp > 0 ? Math.round((totalHp / maxHp) * 100) : 0,
-        passengers: totalPassengers,
-        coins: gameState.coins,
-        wave: gameState.waveNumber,
-        act: gameState.act,
-        distance: Math.round(gameState.distanceTraveled),
-        time: Math.round(gameState.gameTime),
-        enemies: gameState.enemiesKilled,
-        turretReady: gameState.turretReload <= 0,
-        gameOver: gameState.gameOver,
-      });
-
-      // Check for game over transition
-      if (gameState.gameOver && gameState.gameOverTimer > 3) {
-        setScreen('results');
-      }
-
-      animRef.current = requestAnimationFrame(loop);
     };
 
-    lastTimeRef.current = performance.now();
-    animRef.current = requestAnimationFrame(loop);
+    void start();
 
-    return () => cancelAnimationFrame(animRef.current);
+    return () => {
+      disposed = true;
+      cancelAnimationFrame(animRef.current);
+      world?.dispose();
+    };
   }, [screen, gameState]);
 
   // Input handling
@@ -120,9 +130,9 @@ function App() {
       gameState.keys.delete(e.code);
     };
     const handleMouseMove = (e: MouseEvent) => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const rect = canvas.getBoundingClientRect();
+      const host = worldRef.current;
+      if (!host) return;
+      const rect = host.getBoundingClientRect();
       gameState.mouseX = ((e.clientX - rect.left) / rect.width) * CANVAS_W;
       gameState.mouseY = ((e.clientY - rect.top) / rect.height) * CANVAS_H;
     };
@@ -180,15 +190,14 @@ function App() {
       )}
       {screen === 'playing' && (
         <div className="relative w-full h-full flex items-center justify-center">
-          <div className="relative w-full max-w-[960px] aspect-video scanlines crt-glow">
-            <canvas
-              ref={canvasRef}
-              width={CANVAS_W}
-              height={CANVAS_H}
-              className="w-full h-full border-2 border-orange-800 cursor-crosshair"
-              style={{ imageRendering: 'pixelated' }}
-            />
+          <div className="relative w-full max-w-[1280px] aspect-video scanlines crt-glow overflow-hidden border-2 border-orange-800 cursor-crosshair">
+            <div ref={worldRef} className="game-world" />
             <GameHUD hud={hud} />
+            {renderError && (
+              <div role="alert" className="absolute inset-0 flex items-center justify-center bg-black/80 p-6 text-center text-red-300">
+                Не удалось запустить 3D-сцену: {renderError}
+              </div>
+            )}
             {hud.gameOver && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/60">
                 <div className="text-center">
@@ -464,9 +473,13 @@ function CasinoScreen({ state, onBack }: { state: GameState; onBack: () => void 
   const [result, setResult] = useState<CasinoResult | null>(null);
   const [spinning, setSpinning] = useState(false);
   const [displaySymbols, setDisplaySymbols] = useState(['🚂', '🚃', '💰']);
+  const maxBet = Math.floor(state.coins * 0.3);
+  const betOptions = maxBet > 0
+    ? Array.from(new Set([Math.floor(maxBet / 3), Math.floor(maxBet * 2 / 3), maxBet].filter(value => value > 0)))
+    : [];
 
   const play = (type: 'slots' | 'roulette') => {
-    if (state.coins < bet || spinning) return;
+    if (state.coins < bet || bet > maxBet || spinning) return;
     soundManager.init();
     setSpinning(true);
 
@@ -502,7 +515,7 @@ function CasinoScreen({ state, onBack }: { state: GameState; onBack: () => void 
     <div className="max-w-2xl w-full p-6 space-y-6">
       <div className="flex justify-between items-center">
         <h1 className="text-3xl font-black text-purple-400">🎰 КАЗИНО «УДАЧНЫЙ ВАГОН»</h1>
-        <button onClick={onBack} className="px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded text-sm">← Депо</button>
+        <button onClick={onBack} disabled={spinning} className="px-4 py-2 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 rounded text-sm">← Депо</button>
       </div>
 
       <div className="text-center">
@@ -541,7 +554,7 @@ function CasinoScreen({ state, onBack }: { state: GameState; onBack: () => void 
         {/* Bet controls */}
         <div className="flex justify-center items-center gap-4 mb-4">
           <span className="text-gray-400">Ставка:</span>
-          {[100, 500, 1000].map(b => (
+          {betOptions.map(b => (
             <button
               key={b}
               onClick={() => setBet(b)}
@@ -560,14 +573,14 @@ function CasinoScreen({ state, onBack }: { state: GameState; onBack: () => void 
         <div className="flex justify-center gap-4">
           <button
             onClick={() => play('slots')}
-            disabled={spinning || state.coins < bet}
+            disabled={spinning || state.coins < bet || bet > maxBet}
             className="px-6 py-3 bg-gradient-to-r from-yellow-600 to-orange-600 hover:from-yellow-500 hover:to-orange-500 disabled:from-gray-700 disabled:to-gray-700 text-white font-bold rounded-lg transition-all disabled:cursor-not-allowed"
           >
             🎰 СЛОТЫ
           </button>
           <button
             onClick={() => play('roulette')}
-            disabled={spinning || state.coins < bet}
+            disabled={spinning || state.coins < bet || bet > maxBet}
             className="px-6 py-3 bg-gradient-to-r from-red-600 to-pink-600 hover:from-red-500 hover:to-pink-500 disabled:from-gray-700 disabled:to-gray-700 text-white font-bold rounded-lg transition-all disabled:cursor-not-allowed"
           >
             🎡 РУЛЕТКА
@@ -682,11 +695,24 @@ interface HUDData {
   enemies: number;
   turretReady: boolean;
   gameOver: boolean;
+  aimX: number;
+  aimY: number;
 }
 
 function GameHUD({ hud }: { hud: HUDData }) {
   return (
     <>
+      <div
+        className="absolute z-10 pointer-events-none w-7 h-7 -translate-x-1/2 -translate-y-1/2"
+        style={{ left: `${(hud.aimX / CANVAS_W) * 100}%`, top: `${(hud.aimY / CANVAS_H) * 100}%` }}
+      >
+        <div className="absolute left-1/2 top-0 h-2 w-px bg-orange-300" />
+        <div className="absolute left-1/2 bottom-0 h-2 w-px bg-orange-300" />
+        <div className="absolute left-0 top-1/2 h-px w-2 bg-orange-300" />
+        <div className="absolute right-0 top-1/2 h-px w-2 bg-orange-300" />
+        <div className="absolute left-1/2 top-1/2 h-1 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-orange-300" />
+      </div>
+
       {/* Top bar */}
       <div className="absolute top-2 left-2 right-2 flex justify-between items-start pointer-events-none">
         <div className="space-y-1">
@@ -744,7 +770,7 @@ function GameHUD({ hud }: { hud: HUDData }) {
       )}
 
       {/* Controls hint */}
-      <div className="absolute bottom-2 left-1/2 -translate-x-1/2 pointer-events-none">
+      <div className="absolute bottom-14 left-1/2 -translate-x-1/2 pointer-events-none">
         <div className="bg-black/50 px-3 py-1 rounded text-[10px] text-gray-500 font-mono">
           W/S — скорость | Мышь — прицел | ЛКМ — огонь | R — ремонт
         </div>
