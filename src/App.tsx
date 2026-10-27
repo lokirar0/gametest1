@@ -45,45 +45,60 @@ function App() {
         soundManager.init();
 
         let prevTurretReload = gameState.turretMaxReload;
+        let lastRenderTime = 0;
+        let lastHudUpdate = 0;
         const loop = (time: number) => {
-          const dt = Math.min(0.05, (time - lastTimeRef.current) / 1000);
-          lastTimeRef.current = time;
+          try {
+            const dt = Math.min(0.05, (time - lastTimeRef.current) / 1000);
+            lastTimeRef.current = time;
 
-          if (gameState.turretReload > prevTurretReload * 0.5 && prevTurretReload <= 0.1) {
-            soundManager.shoot();
-          }
-          prevTurretReload = gameState.turretReload;
-          update(gameState, dt);
-          world?.render(gameState);
+            if (gameState.turretReload > prevTurretReload * 0.5 && prevTurretReload <= 0.1) {
+              soundManager.shoot();
+            }
+            prevTurretReload = gameState.turretReload;
+            update(gameState, dt);
 
-          const totalPassengers = gameState.wagons
-            .filter(w => !w.detached)
-            .reduce((sum, wagon) => sum + wagon.passengers, 0);
-          const totalHp = gameState.wagons
-            .filter(w => !w.detached)
-            .reduce((sum, wagon) => sum + wagon.hp, 0);
-          const maxHp = gameState.wagons
-            .filter(w => !w.detached)
-            .reduce((sum, wagon) => sum + wagon.maxHp, 0);
+            if (time - lastRenderTime >= 1000 / 30) {
+              world?.render(gameState);
+              lastRenderTime = time;
+            }
 
-          setHud({
-            speed: Math.round(gameState.trainSpeed),
-            hp: maxHp > 0 ? Math.round((totalHp / maxHp) * 100) : 0,
-            passengers: totalPassengers,
-            coins: gameState.coins,
-            wave: gameState.waveNumber,
-            act: gameState.act,
-            distance: Math.round(gameState.distanceTraveled),
-            time: Math.round(gameState.gameTime),
-            enemies: gameState.enemiesKilled,
-            turretReady: gameState.turretReload <= 0,
-            gameOver: gameState.gameOver,
-            aimX: gameState.mouseX,
-            aimY: gameState.mouseY,
-          });
+            if (time - lastHudUpdate >= 100) {
+              const totalPassengers = gameState.wagons
+                .filter(w => !w.detached)
+                .reduce((sum, wagon) => sum + wagon.passengers, 0);
+              const totalHp = gameState.wagons
+                .filter(w => !w.detached)
+                .reduce((sum, wagon) => sum + wagon.hp, 0);
+              const maxHp = gameState.wagons
+                .filter(w => !w.detached)
+                .reduce((sum, wagon) => sum + wagon.maxHp, 0);
 
-          if (gameState.gameOver && gameState.gameOverTimer > 3) {
-            setScreen('results');
+              setHud({
+                speed: Math.round(gameState.trainSpeed),
+                hp: maxHp > 0 ? Math.round((totalHp / maxHp) * 100) : 0,
+                passengers: totalPassengers,
+                coins: gameState.coins,
+                wave: gameState.waveNumber,
+                act: gameState.act,
+                distance: Math.round(gameState.distanceTraveled),
+                time: Math.round(gameState.gameTime),
+                enemies: gameState.enemiesKilled,
+                turretReady: gameState.turretReload <= 0,
+                gameOver: gameState.gameOver,
+                aimX: gameState.mouseX,
+                aimY: gameState.mouseY,
+              });
+              lastHudUpdate = time;
+            }
+
+            if (gameState.gameOver && gameState.gameOverTimer > 3) {
+              setScreen('results');
+            }
+          } catch (error) {
+            console.error('Game loop failed', error);
+            setRenderError(error instanceof Error ? error.message : String(error));
+            return;
           }
 
           animRef.current = requestAnimationFrame(loop);

@@ -226,9 +226,8 @@ export class GameRenderer3D {
 
   constructor(private readonly host: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
+    this.renderer.shadowMap.enabled = false;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.18;
@@ -276,13 +275,6 @@ export class GameRenderer3D {
     this.scene.add(new THREE.HemisphereLight(0xffdfbc, 0x4c423c, 2.2));
     const sun = new THREE.DirectionalLight(0xffedce, 3.2);
     sun.position.set(-8, 18, 12);
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(1024, 1024);
-    sun.shadow.camera.left = -28;
-    sun.shadow.camera.right = 28;
-    sun.shadow.camera.top = 24;
-    sun.shadow.camera.bottom = -24;
-    sun.shadow.bias = -0.0004;
     this.scene.add(sun);
   }
 
@@ -411,6 +403,11 @@ export class GameRenderer3D {
   }
 
   private syncEnemies(state: GameState, time: number): void {
+    while (this.enemies.length > state.enemies.length) {
+      const removed = this.enemies.pop();
+      if (removed) this.disposeObject(removed.group);
+    }
+
     while (this.enemies.length < state.enemies.length) {
       const enemy = state.enemies[this.enemies.length];
       const group = makeEnemy(enemy.type);
@@ -420,7 +417,7 @@ export class GameRenderer3D {
     this.enemies.forEach((entry, index) => {
       const enemy = state.enemies[index];
       if (entry.type !== enemy.type) {
-        this.scene.remove(entry.group);
+        this.disposeObject(entry.group);
         const group = makeEnemy(enemy.type);
         this.scene.add(group);
         this.enemies[index] = { type: enemy.type, group };
@@ -437,13 +434,29 @@ export class GameRenderer3D {
         leg.rotation.z = Math.sin(time * 11 + legIndex * Math.PI) * 0.4;
       });
     });
-    while (this.enemies.length > state.enemies.length) {
-      const removed = this.enemies.pop();
-      if (removed) this.scene.remove(removed.group);
-    }
+  }
+
+  private disposeObject(object: THREE.Object3D): void {
+    this.scene.remove(object);
+    object.traverse(child => {
+      if (!(child instanceof THREE.Mesh)) return;
+      child.geometry.dispose();
+      const materials = Array.isArray(child.material) ? child.material : [child.material];
+      materials.forEach(material => material.dispose());
+    });
   }
 
   private syncProjectiles(state: GameState): void {
+    while (this.projectiles.length > state.projectiles.length) {
+      const removed = this.projectiles.pop();
+      if (removed) {
+        this.scene.remove(removed);
+        removed.geometry.dispose();
+        const materials = Array.isArray(removed.material) ? removed.material : [removed.material];
+        materials.forEach(material => material.dispose());
+      }
+    }
+
     while (this.projectiles.length < state.projectiles.length) {
       const projectile = state.projectiles[this.projectiles.length];
       const mesh = makeProjectile(projectile);
@@ -455,13 +468,17 @@ export class GameRenderer3D {
       mesh.position.set(this.worldX(projectile.x), this.worldY(projectile.y), 0.9);
       mesh.visible = projectile.alive;
     });
-    while (this.projectiles.length > state.projectiles.length) {
-      const removed = this.projectiles.pop();
-      if (removed) this.scene.remove(removed);
-    }
   }
 
   private syncParticles(state: GameState): void {
+    while (this.particles.length > state.particles.length) {
+      const removed = this.particles.pop();
+      if (removed) {
+        this.scene.remove(removed);
+        (removed.material as THREE.Material).dispose();
+      }
+    }
+
     while (this.particles.length < state.particles.length) {
       const mesh = new THREE.Mesh(
         this.particleGeometry,
@@ -478,10 +495,6 @@ export class GameRenderer3D {
       material.color.set(particle.color);
       material.opacity = Math.max(0, Math.min(1, particle.life / particle.maxLife));
     });
-    while (this.particles.length > state.particles.length) {
-      const removed = this.particles.pop();
-      if (removed) this.scene.remove(removed);
-    }
   }
 
   private syncTrack(state: GameState): void {
