@@ -40,6 +40,21 @@ canvas {
   image-rendering: crisp-edges;
 }
 
+.game-world {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #e98e59;
+}
+
+.game-world-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
 /* PS1-style text shadow for headings */
 .ps1-text {
   text-shadow: 2px 2px 0 #000, -1px -1px 0 #000;
