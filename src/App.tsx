@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import {
-  createInitialState, initRun, update,
-  CANVAS_W, CANVAS_H,
+  createInitialState, initRun, update, installTurret, reloadRifle,
   playSlots, playRoulette,
   SHOP_ITEMS,
   type GameState, type CasinoResult,
@@ -16,7 +15,9 @@ function App() {
   const [hud, setHud] = useState({
     speed: 0, hp: 100, passengers: 0, coins: 0,
     wave: 0, act: 1, distance: 0, time: 0, enemies: 0,
-    turretReady: true, gameOver: false, aimX: CANVAS_W / 2, aimY: CANVAS_H / 2,
+    gameOver: false, weapon: 'pistol' as GameState['weapon'],
+    magazine: 30, reserve: 150, reloading: false, turrets: 0,
+    interaction: '',
   });
   const worldRef = useRef<HTMLDivElement>(null);
   const animRef = useRef<number>(0);
@@ -44,7 +45,7 @@ function App() {
         world = new GameRenderer3D(host);
         soundManager.init();
 
-        let prevTurretReload = gameState.turretMaxReload;
+        let prevWeaponCooldown = 0;
         let lastRenderTime = 0;
         let lastHudUpdate = 0;
         const loop = (time: number) => {
@@ -52,11 +53,12 @@ function App() {
             const dt = Math.min(0.05, (time - lastTimeRef.current) / 1000);
             lastTimeRef.current = time;
 
-            if (gameState.turretReload > prevTurretReload * 0.5 && prevTurretReload <= 0.1) {
+            world?.updateAim(gameState);
+            update(gameState, dt);
+            if (gameState.mouseDown && gameState.weaponCooldown > prevWeaponCooldown) {
               soundManager.shoot();
             }
-            prevTurretReload = gameState.turretReload;
-            update(gameState, dt);
+            prevWeaponCooldown = gameState.weaponCooldown;
 
             if (time - lastRenderTime >= 1000 / 30) {
               world?.render(gameState);
@@ -84,10 +86,13 @@ function App() {
                 distance: Math.round(gameState.distanceTraveled),
                 time: Math.round(gameState.gameTime),
                 enemies: gameState.enemiesKilled,
-                turretReady: gameState.turretReload <= 0,
                 gameOver: gameState.gameOver,
-                aimX: gameState.mouseX,
-                aimY: gameState.mouseY,
+                weapon: gameState.weapon,
+                magazine: gameState.rifleMagazine,
+                reserve: gameState.rifleReserve,
+                reloading: gameState.rifleReload > 0,
+                turrets: gameState.wagons.filter(wagon => !wagon.detached && wagon.turretInstalled).length,
+                interaction: gameState.interactionMessageTimer > 0 ? gameState.interactionMessage : '',
               });
               lastHudUpdate = time;
             }
@@ -127,16 +132,16 @@ function App() {
     if (screen !== 'playing') return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      gameState.keys.add(e.code);
-      if (e.code === 'KeyR') {
-        // Repair nearest damaged wagon
-        const damaged = gameState.wagons.find(w => !w.detached && w.hp < w.maxHp);
-        if (damaged) {
-          damaged.hp = Math.min(damaged.maxHp, damaged.hp + 100);
-          damaged.onFire = false;
-          soundManager.hit();
-        }
+      if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown'].includes(e.code)) {
+        e.preventDefault();
       }
+      if (!e.repeat) {
+        if (e.code === 'Digit1') gameState.weapon = 'pistol';
+        if (e.code === 'Digit2') gameState.weapon = 'rifle';
+        if (e.code === 'KeyF') reloadRifle(gameState);
+        if (e.code === 'KeyT') installTurret(gameState);
+      }
+      gameState.keys.add(e.code);
       if (e.code === 'KeyE' || e.code === 'KeyQ') {
         soundManager.whistle();
       }
@@ -145,20 +150,28 @@ function App() {
       gameState.keys.delete(e.code);
     };
     const handleMouseMove = (e: MouseEvent) => {
-      const host = worldRef.current;
-      if (!host) return;
-      const rect = host.getBoundingClientRect();
-      gameState.mouseX = ((e.clientX - rect.left) / rect.width) * CANVAS_W;
-      gameState.mouseY = ((e.clientY - rect.top) / rect.height) * CANVAS_H;
+      if (document.pointerLockElement !== worldRef.current) return;
+      gameState.playerYaw -= e.movementX * 0.0025;
+      gameState.playerPitch = Math.max(-1.15, Math.min(0.55, gameState.playerPitch - e.movementY * 0.002));
     };
-    const handleMouseDown = () => { gameState.mouseDown = true; };
+    const handleMouseDown = (e: MouseEvent) => {
+      if (document.pointerLockElement !== worldRef.current) {
+        void worldRef.current?.requestPointerLock();
+        return;
+      }
+      if (e.button === 0) gameState.mouseDown = true;
+    };
     const handleMouseUp = () => { gameState.mouseDown = false; };
+    const handlePointerLockChange = () => {
+      gameState.mouseDown = false;
+    };
 
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mousedown', handleMouseDown);
     window.addEventListener('mouseup', handleMouseUp);
+    document.addEventListener('pointerlockchange', handlePointerLockChange);
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
@@ -166,6 +179,8 @@ function App() {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mousedown', handleMouseDown);
       window.removeEventListener('mouseup', handleMouseUp);
+      document.removeEventListener('pointerlockchange', handlePointerLockChange);
+      if (document.pointerLockElement === worldRef.current) document.exitPointerLock();
     };
   }, [screen, gameState]);
 
@@ -336,7 +351,7 @@ function MainMenu({ onStart, onDepot }: { onStart: () => void; onDepot: () => vo
           </h1>
           <h2 className="text-2xl text-gray-400 font-bold">Depot to Depot</h2>
           <p className="text-gray-500 text-sm mt-4 max-w-md mx-auto italic">
-            «Довези пассажиров. Отбейся от бандитов. Не угробь поезд. Зайди в казино.»
+            «Защити поезд от первого лица: стреляй, чини вагоны и ставь турели.»
           </p>
         </div>
 
@@ -356,8 +371,8 @@ function MainMenu({ onStart, onDepot }: { onStart: () => void; onDepot: () => vo
         </div>
 
         <div className="text-xs text-gray-600 space-y-1 mt-8">
-          <p>W/S — газ/тормоз | Мышь — прицел | ЛКМ — стрельба</p>
-          <p>R — ремонт | Space — экстренный тормоз | E/Q — гудок</p>
+          <p>WASD — ходить по вагонам | Мышь — обзор | ЛКМ — стрелять</p>
+          <p>1/2 — оружие | F — перезарядка | R — чинить | T — турель</p>
           <button
             onClick={toggleSound}
             className="mt-3 px-4 py-1 bg-gray-800 hover:bg-gray-700 rounded text-xs text-gray-400 transition-all"
@@ -708,18 +723,20 @@ interface HUDData {
   distance: number;
   time: number;
   enemies: number;
-  turretReady: boolean;
   gameOver: boolean;
-  aimX: number;
-  aimY: number;
+  weapon: GameState['weapon'];
+  magazine: number;
+  reserve: number;
+  reloading: boolean;
+  turrets: number;
+  interaction: string;
 }
 
 function GameHUD({ hud }: { hud: HUDData }) {
   return (
     <>
       <div
-        className="absolute z-10 pointer-events-none w-7 h-7 -translate-x-1/2 -translate-y-1/2"
-        style={{ left: `${(hud.aimX / CANVAS_W) * 100}%`, top: `${(hud.aimY / CANVAS_H) * 100}%` }}
+        className="absolute left-1/2 top-1/2 z-10 pointer-events-none w-7 h-7 -translate-x-1/2 -translate-y-1/2"
       >
         <div className="absolute left-1/2 top-0 h-2 w-px bg-orange-300" />
         <div className="absolute left-1/2 bottom-0 h-2 w-px bg-orange-300" />
@@ -771,15 +788,23 @@ function GameHUD({ hud }: { hud: HUDData }) {
         </div>
       </div>
 
-      {/* Turret indicator */}
-      {hud.act >= 2 && (
-        <div className="absolute bottom-14 right-2 pointer-events-none">
-          <div className={`px-2 py-1 rounded text-xs font-mono ${
-            hud.turretReady
-              ? 'bg-green-900/70 text-green-300 border border-green-600'
-              : 'bg-red-900/70 text-red-300 border border-red-600'
-          }`}>
-            {hud.turretReady ? '🔫 ГОТОВА' : '🔫 ПЕРЕЗАРЯДКА'}
+      <div className="absolute top-20 right-2 pointer-events-none text-right">
+        <div className="bg-black/75 px-3 py-2 rounded border border-orange-800/60 font-mono">
+          <div className="text-xs text-orange-300">
+            {hud.weapon === 'pistol' ? 'ПИСТОЛЕТ [1]' : 'АВТОМАТ [2]'}
+          </div>
+          <div className="text-lg font-bold text-white">
+            {hud.weapon === 'pistol' ? '∞' : `${hud.magazine} / ${hud.reserve}`}
+          </div>
+          {hud.reloading && <div className="text-[10px] text-yellow-300">ПЕРЕЗАРЯДКА...</div>}
+          <div className="text-[10px] text-gray-400">Турели: {hud.turrets}</div>
+        </div>
+      </div>
+
+      {hud.interaction && (
+        <div className="absolute left-1/2 top-[58%] -translate-x-1/2 pointer-events-none">
+          <div className="bg-black/75 px-4 py-2 rounded border border-orange-700 text-sm font-bold text-orange-200">
+            {hud.interaction}
           </div>
         </div>
       )}
@@ -787,7 +812,7 @@ function GameHUD({ hud }: { hud: HUDData }) {
       {/* Controls hint */}
       <div className="absolute bottom-14 left-1/2 -translate-x-1/2 pointer-events-none">
         <div className="bg-black/50 px-3 py-1 rounded text-[10px] text-gray-500 font-mono">
-          W/S — скорость | Мышь — прицел | ЛКМ — огонь | R — ремонт
+          WASD — ходьба | Мышь — обзор | ЛКМ — огонь | R — ремонт | T — турель
         </div>
       </div>
     </>

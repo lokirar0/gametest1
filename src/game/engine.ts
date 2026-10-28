@@ -19,6 +19,9 @@ export interface Wagon {
   fireTimer: number;
   detached: boolean;
   detachVelocity: { x: number; y: number };
+  turretInstalled: boolean;
+  turretReload: number;
+  turretAngle: number;
   color: string;
   damageFlash: number;
 }
@@ -53,7 +56,7 @@ export interface Projectile {
   damage: number;
   alive: boolean;
   trail: Vec2[];
-  type: 'bullet' | 'explosive' | 'fire';
+  type: 'bullet' | 'explosive' | 'fire' | 'turret';
 }
 
 export interface Particle {
@@ -126,6 +129,19 @@ export interface GameState {
   turretSpeed: number;
   trainArmor: number;
   autoRepair: number;
+  // First-person player
+  playerX: number;
+  playerZ: number;
+  playerYaw: number;
+  playerPitch: number;
+  weapon: 'pistol' | 'rifle';
+  weaponCooldown: number;
+  rifleMagazine: number;
+  rifleReserve: number;
+  rifleReload: number;
+  repairCooldown: number;
+  interactionMessage: string;
+  interactionMessageTimer: number;
   // Mouse
   mouseX: number;
   mouseY: number;
@@ -165,6 +181,11 @@ export const CANVAS_W = 480;
 export const CANVAS_H = 270;
 export const GROUND_Y = 220;
 export const TRACK_Y = 210;
+export const TURRET_COST = 150;
+export const RIFLE_MAGAZINE_SIZE = 30;
+const PISTOL_DAMAGE = 8;
+const RIFLE_DAMAGE = 36;
+const PLAYER_MOVE_SPEED = 52;
 const WAGON_W = 52;
 const WAGON_H = 28;
 const LOCO_W = 62;
@@ -255,10 +276,22 @@ export function createInitialState(): GameState {
     act: 1,
     trackLength: 3000,
     trackEventTimer: 0,
-    turretDamage: 25,
+    turretDamage: 30,
     turretSpeed: 1,
     trainArmor: 0,
     autoRepair: 0,
+    playerX: 96,
+    playerZ: 0,
+    playerYaw: -Math.PI / 2,
+    playerPitch: -0.08,
+    weapon: 'pistol',
+    weaponCooldown: 0,
+    rifleMagazine: RIFLE_MAGAZINE_SIZE,
+    rifleReserve: 150,
+    rifleReload: 0,
+    repairCooldown: 0,
+    interactionMessage: '',
+    interactionMessageTimer: 0,
     mouseX: CANVAS_W / 2,
     mouseY: CANVAS_H / 2,
     mouseDown: false,
@@ -311,7 +344,7 @@ export function initRun(state: GameState): void {
   state.gameOver = false;
   state.gameOverTimer = 0;
   state.actTransition = 3;
-  state.actTransitionText = 'АКТ 1: БЕЗ ПУШКИ';
+  state.actTransitionText = 'АКТ 1: ПРИГОТОВЬТЕСЬ К БОЮ';
   state.eventTimer = 25 + Math.random() * 20;
   state.activeEvent = null;
   state.eventDuration = 0;
@@ -319,6 +352,20 @@ export function initRun(state: GameState): void {
   state.derailTimer = 0;
   state.shakeAmount = 0;
   state.turretReload = 0;
+  state.playerX = LOCO_W + 8 + WAGON_W / 2;
+  state.playerZ = 0;
+  state.playerYaw = -Math.PI / 2;
+  state.playerPitch = -0.08;
+  state.weapon = 'pistol';
+  state.weaponCooldown = 0;
+  state.rifleMagazine = RIFLE_MAGAZINE_SIZE;
+  state.rifleReserve = 150;
+  state.rifleReload = 0;
+  state.repairCooldown = 0;
+  state.interactionMessage = '';
+  state.interactionMessageTimer = 0;
+  state.mouseDown = false;
+  state.keys.clear();
 
   // Create locomotive
   // We store locomotive info but draw it separately
@@ -326,7 +373,7 @@ export function initRun(state: GameState): void {
   const wagonTypes: Array<{type: Wagon['type']; passengers: number}> = [
     { type: 'passenger', passengers: 20 },
     { type: 'passenger', passengers: 20 },
-    { type: 'turret', passengers: 0 },
+    { type: 'cargo', passengers: 0 },
     { type: 'passenger', passengers: 15 },
     { type: 'casino', passengers: 5 },
   ];
@@ -348,6 +395,9 @@ export function initRun(state: GameState): void {
       fireTimer: 0,
       detached: false,
       detachVelocity: { x: 0, y: 0 },
+      turretInstalled: false,
+      turretReload: 0,
+      turretAngle: 0,
       color: getWagonColor(wt.type),
       damageFlash: 0,
     });
@@ -389,20 +439,11 @@ export function update(state: GameState, dt: number): void {
     state.actTransition -= dt;
   }
 
-  // Tutorial hints (first 10 seconds)
-  if (state.gameTime < 10 && state.gameTime > 0) {
-    // Show tutorial text via actTransition system
-    if (state.gameTime < 3 && !state.actTransitionText.includes('W/S')) {
-      state.actTransition = 3;
-      state.actTransitionText = 'W/S — ГАЗ/ТОРМОЗ | МЫШЬ — ПРИЦЕЛ';
-    }
-  }
-
   // Train speed is displayed in km/h, while route distance is measured in meters.
   if (state.distanceTraveled >= state.trackLength / 3 && state.act === 1) {
     state.act = 2;
     state.actTransition = 3;
-    state.actTransitionText = 'АКТ 2: ПУШКА АКТИВИРОВАНА!';
+    state.actTransitionText = 'АКТ 2: НОВАЯ ВОЛНА ВРАГОВ!';
     addShake(state, 10, 1);
   } else if (state.distanceTraveled >= state.trackLength * 2 / 3 && state.act === 2) {
     state.act = 3;
@@ -413,6 +454,7 @@ export function update(state: GameState, dt: number): void {
 
   // Train physics
   updateTrain(state, dt);
+  updatePlayer(state, dt);
 
   // Distance
   state.distanceTraveled += (state.trainSpeed / 3.6) * dt;
@@ -467,11 +509,6 @@ export function update(state: GameState, dt: number): void {
     }
   }
 
-  // Turret reload
-  if (state.turretReload > 0) {
-    state.turretReload -= dt * state.turretSpeed;
-  }
-
   // Combo timer
   if (state.comboTimer > 0) {
     state.comboTimer -= dt;
@@ -480,18 +517,7 @@ export function update(state: GameState, dt: number): void {
     }
   }
 
-  // Shooting
-  if (state.mouseDown && state.turretReload <= 0 && state.act >= 2) {
-    shootTurret(state);
-  }
-
-  // Update turret angle
-  const turretWagon = state.wagons.find(w => w.type === 'turret' && !w.detached);
-  if (turretWagon) {
-    const turretX = state.trainX + turretWagon.x + turretWagon.width / 2;
-    const turretY = turretWagon.y - 5;
-    state.turretAngle = Math.atan2(state.mouseY - turretY, state.mouseX - turretX);
-  }
+  updateMountedTurrets(state, dt);
 
   // Check game over
   const aliveWagons = state.wagons.filter(w => !w.detached);
@@ -520,24 +546,8 @@ function updateTrain(state: GameState, dt: number): void {
     return;
   }
 
-  // Acceleration
-  if (state.keys.has('KeyW') || state.keys.has('ArrowUp')) {
-    state.trainSpeed += state.acceleration * dt;
-  }
-  // Braking
-  if (state.keys.has('KeyS') || state.keys.has('ArrowDown') || state.keys.has('Space')) {
-    state.trainSpeed -= state.braking * dt;
-    if (state.keys.has('Space') && state.trainSpeed > 60) {
-      // Emergency brake — risk of derail on curves
-      addShake(state, 3, 0.3);
-    }
-  }
-
-  // Natural deceleration
-  state.trainSpeed *= (1 - 0.3 * dt);
-
-  // Clamp
-  state.trainSpeed = Math.max(0, Math.min(state.maxSpeed, state.trainSpeed));
+  // The train keeps rolling while the player moves and fights on the wagons.
+  state.trainSpeed = Math.min(state.maxSpeed, state.trainSpeed + state.acceleration * dt);
 
   // Smoke particles from locomotive
   if (state.trainSpeed > 10 && Math.random() < 0.3) {
@@ -552,6 +562,186 @@ function updateTrain(state: GameState, dt: number): void {
       size: 3 + Math.random() * 4,
       type: 'steam',
     });
+  }
+}
+
+function updatePlayer(state: GameState, dt: number): void {
+  const forward = Number(state.keys.has('KeyW') || state.keys.has('ArrowUp'))
+    - Number(state.keys.has('KeyS') || state.keys.has('ArrowDown'));
+  const strafe = Number(state.keys.has('KeyD'))
+    - Number(state.keys.has('KeyA'));
+
+  if (forward !== 0 || strafe !== 0) {
+    const length = Math.hypot(forward, strafe);
+    const normalizedForward = forward / length;
+    const normalizedStrafe = strafe / length;
+    state.playerX += (
+      -Math.sin(state.playerYaw) * normalizedForward
+      + Math.cos(state.playerYaw) * normalizedStrafe
+    ) * PLAYER_MOVE_SPEED * dt;
+    state.playerZ += (
+      -Math.cos(state.playerYaw) * normalizedForward
+      - Math.sin(state.playerYaw) * normalizedStrafe
+    ) * PLAYER_MOVE_SPEED * dt * 0.035;
+  }
+
+  const attachedWagons = state.wagons.filter(wagon => !wagon.detached);
+  const firstWagon = attachedWagons[0];
+  const lastWagon = attachedWagons[attachedWagons.length - 1];
+  const minX = firstWagon?.x ?? LOCO_W;
+  const maxX = lastWagon ? lastWagon.x + lastWagon.width : minX;
+  state.playerX = Math.max(minX + 2, Math.min(maxX - 2, state.playerX));
+  state.playerZ = Math.max(-0.48, Math.min(0.48, state.playerZ));
+
+  if (state.weaponCooldown > 0) state.weaponCooldown -= dt;
+  if (state.repairCooldown > 0) state.repairCooldown -= dt;
+  if (state.interactionMessageTimer > 0) {
+    state.interactionMessageTimer -= dt;
+    if (state.interactionMessageTimer <= 0) state.interactionMessage = '';
+  }
+
+  if (state.rifleReload > 0) {
+    state.rifleReload -= dt;
+    if (state.rifleReload <= 0) {
+      const roundsToLoad = Math.min(RIFLE_MAGAZINE_SIZE - state.rifleMagazine, state.rifleReserve);
+      state.rifleMagazine += roundsToLoad;
+      state.rifleReserve -= roundsToLoad;
+    }
+  }
+
+  const nearbyWagon = getNearbyWagon(state);
+  if (state.keys.has('KeyR') && nearbyWagon && nearbyWagon.hp < nearbyWagon.maxHp && state.repairCooldown <= 0) {
+    nearbyWagon.hp = Math.min(nearbyWagon.maxHp, nearbyWagon.hp + 65);
+    nearbyWagon.onFire = false;
+    nearbyWagon.fireTimer = 0;
+    nearbyWagon.damageFlash = 0;
+    state.repairCooldown = 0.65;
+    state.interactionMessage = 'Вагон починен';
+    state.interactionMessageTimer = 0.8;
+  }
+
+  if (state.mouseDown && state.weaponCooldown <= 0) {
+    firePlayerWeapon(state);
+  }
+}
+
+function getNearbyWagon(state: GameState): Wagon | undefined {
+  return state.wagons.find(wagon =>
+    !wagon.detached
+    && Math.abs(state.playerX - (wagon.x + wagon.width / 2)) <= wagon.width * 0.55,
+  );
+}
+
+export function installTurret(state: GameState): boolean {
+  const wagon = getNearbyWagon(state);
+  if (!wagon) {
+    state.interactionMessage = 'Подойдите к вагону, чтобы поставить турель';
+  } else if (wagon.turretInstalled) {
+    state.interactionMessage = 'На этом вагоне уже есть турель';
+  } else if (state.coins < TURRET_COST) {
+    state.interactionMessage = `Для турели нужно ${TURRET_COST} монет`;
+  } else {
+    wagon.turretInstalled = true;
+    wagon.turretReload = 0.6;
+    state.coins -= TURRET_COST;
+    state.interactionMessage = 'Турель установлена: она стреляет автоматически';
+  }
+  state.interactionMessageTimer = 2.2;
+  return wagon !== undefined && wagon.turretInstalled;
+}
+
+export function reloadRifle(state: GameState): void {
+  if (
+    state.weapon !== 'rifle'
+    || state.rifleReload > 0
+    || state.rifleMagazine >= RIFLE_MAGAZINE_SIZE
+    || state.rifleReserve <= 0
+  ) return;
+  state.rifleReload = 1.6;
+}
+
+function firePlayerWeapon(state: GameState): void {
+  if (state.weapon === 'rifle' && (state.rifleMagazine <= 0 || state.rifleReload > 0)) {
+    state.weaponCooldown = 0.15;
+    return;
+  }
+
+  const sourceX = state.trainX + state.playerX;
+  const sourceY = TRACK_Y - WAGON_H - 13;
+  let dx = state.mouseX - sourceX;
+  let dy = state.mouseY - sourceY;
+  const distance = Math.hypot(dx, dy);
+  if (distance < 1) {
+    dx = -Math.sin(state.playerYaw);
+    dy = 0;
+  } else {
+    dx /= distance;
+    dy /= distance;
+  }
+
+  const rifle = state.weapon === 'rifle';
+  const speed = rifle ? 520 : 390;
+  state.projectiles.push({
+    x: sourceX,
+    y: sourceY,
+    vx: dx * speed,
+    vy: dy * speed,
+    radius: rifle ? 4 : 2,
+    damage: rifle ? RIFLE_DAMAGE : PISTOL_DAMAGE,
+    alive: true,
+    trail: [],
+    type: 'bullet',
+  });
+  if (rifle) state.rifleMagazine--;
+  state.weaponCooldown = rifle ? 0.12 : 0.42;
+  addShake(state, rifle ? 1.8 : 0.6, 0.08);
+
+  if (rifle && state.rifleMagazine === 0 && state.rifleReserve > 0) {
+    state.rifleReload = 1.6;
+    state.interactionMessage = 'Перезарядка автомата...';
+    state.interactionMessageTimer = 1.6;
+  }
+}
+
+function updateMountedTurrets(state: GameState, dt: number): void {
+  for (const wagon of state.wagons) {
+    if (wagon.detached || !wagon.turretInstalled) continue;
+    wagon.turretReload = Math.max(0, wagon.turretReload - dt * state.turretSpeed);
+    if (wagon.turretReload > 0) continue;
+
+    const sourceX = state.trainX + wagon.x + wagon.width / 2;
+    const sourceY = wagon.y - 7;
+    let target: Enemy | undefined;
+    let closestDistance = 280;
+    for (const enemy of state.enemies) {
+      if (!enemy.alive) continue;
+      const distance = Math.hypot(
+        enemy.x + enemy.width / 2 - sourceX,
+        enemy.y + enemy.height / 2 - sourceY,
+      );
+      if (distance < closestDistance) {
+        target = enemy;
+        closestDistance = distance;
+      }
+    }
+
+    if (!target) continue;
+    const dx = target.x + target.width / 2 - sourceX;
+    const dy = target.y + target.height / 2 - sourceY;
+    const angle = Math.atan2(dy, dx);
+    wagon.turretAngle = angle;
+    state.projectiles.push({
+      x: sourceX,
+      y: sourceY,
+      vx: Math.cos(angle) * 420,
+      vy: Math.sin(angle) * 420,
+      radius: 4,
+      damage: state.turretDamage,
+      alive: true,
+      trail: [],
+      type: 'turret',
+    });
+    wagon.turretReload = state.turretMaxReload;
   }
 }
 
@@ -1879,9 +2069,9 @@ export interface ShopItem {
 
 export const SHOP_ITEMS: ShopItem[] = [
   {
-    id: 'ammo', name: 'Патроны (50 шт)', desc: 'Боеприпасы для пушки',
+    id: 'ammo', name: 'Патроны автомата (50 шт)', desc: 'Запасные патроны для автомата',
     cost: 200, maxLevel: 99,
-    apply: () => {},
+    apply: (s) => { s.rifleReserve += 50; },
   },
   {
     id: 'repair', name: 'Ремонтный набор', desc: 'Полностью чинит один вагон',

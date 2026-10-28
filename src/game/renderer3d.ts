@@ -16,8 +16,6 @@ const TRACK_SPACING = 1.15;
 
 const palette = {
   rail: 0x49403b,
-  steel: 0x777a76,
-  wheel: 0x292b2c,
   window: 0x9bd5e8,
   passenger: 0x2871a0,
   cargo: 0x696b66,
@@ -26,6 +24,46 @@ const palette = {
   armor: 0x4c5f50,
   workshop: 0x765741,
 };
+
+function makeTurret(): THREE.Group {
+  const mount = new THREE.Group();
+  const brass = standard(0xc39543, 0.5);
+  const barrel = standard(0x292d2d, 0.55);
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.53, 0.62, 0.22, 10), brass);
+  base.position.y = 0.1;
+  mount.add(base);
+  box(mount, [0.62, 0.35, 0.62], [0, 0.36, 0], standard(0x51534d));
+  box(mount, [0.98, 0.15, 0.19], [0.54, 0.42, 0], barrel);
+  return mount;
+}
+
+function makeWeaponRig(kind: 'pistol' | 'rifle'): THREE.Group {
+  const rig = new THREE.Group();
+  const metal = standard(kind === 'rifle' ? 0x718078 : 0x92999b, 0.4);
+  const darkMetal = standard(0x454c4e, 0.38);
+  const grip = standard(0x806149);
+  const sleeve = standard(0x65795f);
+  const hand = standard(0xc98e69);
+
+  box(rig, [0.24, 0.2, 0.32], [0.11, -0.1, -0.38], sleeve);
+  box(rig, [0.19, 0.12, 0.18], [0.1, -0.03, -0.5], hand);
+  if (kind === 'pistol') {
+    box(rig, [0.16, 0.14, 0.47], [0.08, 0.02, -0.75], metal);
+    box(rig, [0.12, 0.09, 0.36], [0.08, 0.13, -0.72], darkMetal);
+    box(rig, [0.13, 0.26, 0.14], [0.08, -0.17, -0.57], grip);
+    box(rig, [0.1, 0.09, 0.13], [0.08, 0.12, -0.95], darkMetal);
+  } else {
+    box(rig, [0.15, 0.15, 0.85], [0.08, -0.01, -0.84], metal);
+    box(rig, [0.11, 0.08, 0.74], [0.08, 0.1, -0.9], darkMetal);
+    box(rig, [0.065, 0.065, 0.48], [0.08, 0.015, -1.47], darkMetal);
+    box(rig, [0.17, 0.25, 0.18], [0.08, -0.19, -0.66], grip);
+    box(rig, [0.13, 0.27, 0.34], [0.08, -0.13, -0.25], grip);
+    box(rig, [0.32, 0.17, 0.42], [-0.06, -0.04, -0.8], sleeve);
+    box(rig, [0.2, 0.12, 0.2], [-0.05, 0.01, -0.67], hand);
+    box(rig, [0.1, 0.08, 0.18], [0.08, 0.14, -0.81], darkMetal);
+  }
+  return rig;
+}
 
 function box(
   parent: THREE.Object3D,
@@ -133,18 +171,12 @@ function makeWagon(wagon: Wagon): THREE.Group {
     group.add(makeWheel(trim, x, -0.7, 0.25));
   }
 
-  if (wagon.type === 'turret') {
-    const mount = new THREE.Group();
+  if (wagon.type === 'turret' || wagon.turretInstalled) {
+    const mount = makeTurret();
     mount.position.set(0, 1.6, 0);
-    const brass = standard(0xc39543, 0.5);
-    const barrel = standard(0x292d2d, 0.55);
-    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.53, 0.62, 0.22, 10), brass);
-    base.position.y = 0.1;
-    mount.add(base);
-    box(mount, [0.62, 0.35, 0.62], [0, 0.36, 0], standard(0x51534d));
-    box(mount, [0.98, 0.15, 0.19], [0.54, 0.42, 0], barrel);
     group.add(mount);
     group.userData.turret = mount;
+    group.userData.hasTurret = true;
   }
 
   return group;
@@ -211,9 +243,11 @@ function makeProjectile(projectile: Projectile): THREE.Mesh {
 
 export class GameRenderer3D {
   private readonly scene = new THREE.Scene();
-  private readonly camera = new THREE.PerspectiveCamera(42, 16 / 9, 0.1, 180);
   private readonly renderer: THREE.WebGLRenderer;
   private readonly train = makeLocomotive();
+  private readonly camera = new THREE.PerspectiveCamera(72, 16 / 9, 0.1, 180);
+  private readonly pistolRig = makeWeaponRig('pistol');
+  private readonly rifleRig = makeWeaponRig('rifle');
   private readonly wagons: THREE.Group[] = [];
   private readonly enemies: Array<{ type: Enemy['type']; group: THREE.Group }> = [];
   private readonly projectiles: THREE.Mesh[] = [];
@@ -240,6 +274,11 @@ export class GameRenderer3D {
     this.addGroundAndTrack();
     this.addScenery();
     this.scene.add(this.train);
+    this.camera.rotation.order = 'YXZ';
+    this.camera.add(this.pistolRig, this.rifleRig);
+    this.scene.add(this.camera);
+    this.pistolRig.position.set(0.42, -0.37, -0.34);
+    this.rifleRig.position.set(0.4, -0.39, -0.4);
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(host);
     this.resize();
@@ -247,6 +286,7 @@ export class GameRenderer3D {
 
   render(state: GameState): void {
     const time = this.clock.getElapsedTime();
+    this.updateView(state, time);
     this.syncTrain(state, time);
     this.syncWagons(state);
     this.syncEnemies(state, time);
@@ -254,8 +294,15 @@ export class GameRenderer3D {
     this.syncParticles(state);
     this.syncTrack(state);
     this.syncScenery(state);
-    this.updateCamera(state);
     this.renderer.render(this.scene, this.camera);
+  }
+
+  updateAim(state: GameState): void {
+    this.updateView(state, this.clock.getElapsedTime());
+    const direction = this.camera.getWorldDirection(new THREE.Vector3());
+    const target = this.camera.position.clone().addScaledVector(direction, 20);
+    state.mouseX = target.x / SCALE + CANVAS_W / 2;
+    state.mouseY = GROUND_Y - (target.y - 0.16) / SCALE;
   }
 
   dispose(): void {
@@ -397,8 +444,18 @@ export class GameRenderer3D {
           object.material.emissiveIntensity = wagon.onFire ? 0.8 : 0;
         }
       });
-      const turret = group.userData.turret as THREE.Group | undefined;
-      if (turret) turret.rotation.z = state.turretAngle;
+      const needsTurret = wagon.turretInstalled || wagon.type === 'turret';
+      let turret = group.userData.turret as THREE.Group | undefined;
+      if (needsTurret && !turret) {
+        turret = makeTurret();
+        turret.position.set(0, 1.6, 0);
+        group.add(turret);
+        group.userData.turret = turret;
+      } else if (!needsTurret && turret) {
+        this.disposeObject(turret);
+        delete group.userData.turret;
+      }
+      if (turret) turret.rotation.z = -wagon.turretAngle;
     });
   }
 
@@ -512,10 +569,14 @@ export class GameRenderer3D {
     });
   }
 
-  private updateCamera(state: GameState): void {
-    const targetX = this.worldX(state.trainX + 210);
-    this.camera.position.set(targetX + 1.7, 8.2, 24);
-    this.camera.lookAt(targetX, 1.55, 0);
+  private updateView(state: GameState, time: number): void {
+    this.camera.position.set(this.worldX(state.trainX + state.playerX), 2.45, state.playerZ);
+    this.camera.rotation.set(state.playerPitch, state.playerYaw, 0, 'YXZ');
+    this.pistolRig.visible = state.weapon === 'pistol';
+    this.rifleRig.visible = state.weapon === 'rifle';
+    const bob = Math.sin(time * 10) * 0.018;
+    this.pistolRig.position.y = -0.37 + bob;
+    this.rifleRig.position.y = -0.39 + bob;
   }
 
   private resize(): void {
