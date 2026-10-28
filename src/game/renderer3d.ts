@@ -2,15 +2,20 @@ import * as THREE from 'three';
 import {
   CANVAS_H,
   CANVAS_W,
+  ENEMY_DEPTH,
   GROUND_Y,
   TRACK_Y,
+  TURRET_MUZZLE_X,
+  TURRET_MUZZLE_Y,
+  TURRET_PIVOT_HEIGHT,
+  WORLD_SCALE,
   type Enemy,
   type GameState,
   type Projectile,
   type Wagon,
 } from './engine';
 
-const SCALE = 0.05;
+const SCALE = WORLD_SCALE;
 const SCENE_WIDTH = 44;
 const TRACK_SPACING = 1.15;
 
@@ -34,6 +39,7 @@ function makeTurret(): THREE.Group {
   mount.add(base);
   box(mount, [0.62, 0.35, 0.62], [0, 0.36, 0], standard(0x51534d));
   box(mount, [0.98, 0.15, 0.19], [0.54, 0.42, 0], barrel);
+  mount.userData.muzzle = new THREE.Vector3(TURRET_MUZZLE_X, TURRET_MUZZLE_Y, 0);
   return mount;
 }
 
@@ -62,6 +68,9 @@ function makeWeaponRig(kind: 'pistol' | 'rifle'): THREE.Group {
     box(rig, [0.2, 0.12, 0.2], [-0.05, 0.01, -0.67], hand);
     box(rig, [0.1, 0.08, 0.18], [0.08, 0.14, -0.81], darkMetal);
   }
+  rig.userData.muzzle = kind === 'pistol'
+    ? new THREE.Vector3(0.08, 0.12, -1.015)
+    : new THREE.Vector3(0.08, 0.015, -1.71);
   return rig;
 }
 
@@ -173,7 +182,7 @@ function makeWagon(wagon: Wagon): THREE.Group {
 
   if (wagon.type === 'turret' || wagon.turretInstalled) {
     const mount = makeTurret();
-    mount.position.set(0, 1.6, 0);
+    mount.position.set(0, TURRET_PIVOT_HEIGHT, 0);
     group.add(mount);
     group.userData.turret = mount;
     group.userData.hasTurret = true;
@@ -300,9 +309,22 @@ export class GameRenderer3D {
   updateAim(state: GameState): void {
     this.updateView(state, this.clock.getElapsedTime());
     const direction = this.camera.getWorldDirection(new THREE.Vector3());
-    const target = this.camera.position.clone().addScaledVector(direction, 20);
+    this.camera.updateMatrixWorld(true);
+    const distanceToEnemyPlane = (ENEMY_DEPTH - this.camera.position.z) / direction.z;
+    const aimDistance = Number.isFinite(distanceToEnemyPlane)
+      && distanceToEnemyPlane > 0
+      && distanceToEnemyPlane < 100
+      ? distanceToEnemyPlane
+      : 20;
+    const target = this.camera.position.clone().addScaledVector(direction, aimDistance);
+    const weaponRig = state.weapon === 'pistol' ? this.pistolRig : this.rifleRig;
+    const muzzle = weaponRig.localToWorld((weaponRig.userData.muzzle as THREE.Vector3).clone());
+    state.playerMuzzleX = muzzle.x / SCALE + CANVAS_W / 2;
+    state.playerMuzzleY = GROUND_Y - (muzzle.y - 0.16) / SCALE;
+    state.playerMuzzleZ = muzzle.z;
     state.mouseX = target.x / SCALE + CANVAS_W / 2;
     state.mouseY = GROUND_Y - (target.y - 0.16) / SCALE;
+    state.aimZ = target.z;
   }
 
   dispose(): void {
@@ -448,7 +470,7 @@ export class GameRenderer3D {
       let turret = group.userData.turret as THREE.Group | undefined;
       if (needsTurret && !turret) {
         turret = makeTurret();
-        turret.position.set(0, 1.6, 0);
+        turret.position.set(0, TURRET_PIVOT_HEIGHT, 0);
         group.add(turret);
         group.userData.turret = turret;
       } else if (!needsTurret && turret) {
@@ -481,7 +503,11 @@ export class GameRenderer3D {
         entry = this.enemies[index];
       }
       entry.group.visible = enemy.alive;
-      entry.group.position.set(this.worldX(enemy.x + enemy.width / 2), this.worldY(enemy.y + enemy.height), -1.3);
+      entry.group.position.set(
+        this.worldX(enemy.x + enemy.width / 2),
+        this.worldY(enemy.y + enemy.height / 2) - 1,
+        ENEMY_DEPTH,
+      );
       entry.group.rotation.z = enemy.type === 'pterodactyl' ? Math.sin(enemy.wingPhase) * 0.1 : 0;
       entry.group.scale.setScalar(enemy.type === 'drone' ? 0.75 : 0.9);
       const wing = entry.group.userData.wing as THREE.Mesh | undefined;
@@ -522,7 +548,7 @@ export class GameRenderer3D {
     }
     this.projectiles.forEach((mesh, index) => {
       const projectile = state.projectiles[index];
-      mesh.position.set(this.worldX(projectile.x), this.worldY(projectile.y), 0.9);
+      mesh.position.set(this.worldX(projectile.x), this.worldY(projectile.y), projectile.z);
       mesh.visible = projectile.alive;
     });
   }

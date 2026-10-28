@@ -50,8 +50,10 @@ export interface Enemy {
 export interface Projectile {
   x: number;
   y: number;
+  z: number;
   vx: number;
   vy: number;
+  vz: number;
   radius: number;
   damage: number;
   alive: boolean;
@@ -134,6 +136,10 @@ export interface GameState {
   playerZ: number;
   playerYaw: number;
   playerPitch: number;
+  playerMuzzleX: number;
+  playerMuzzleY: number;
+  playerMuzzleZ: number;
+  aimZ: number;
   weapon: 'pistol' | 'rifle';
   weaponCooldown: number;
   rifleMagazine: number;
@@ -183,6 +189,11 @@ export const GROUND_Y = 220;
 export const TRACK_Y = 210;
 export const TURRET_COST = 150;
 export const RIFLE_MAGAZINE_SIZE = 30;
+export const ENEMY_DEPTH = -1.3;
+export const TURRET_PIVOT_HEIGHT = 1.6;
+export const TURRET_MUZZLE_X = 1.03;
+export const TURRET_MUZZLE_Y = 0.42;
+export const WORLD_SCALE = 0.05;
 const PISTOL_DAMAGE = 8;
 const RIFLE_DAMAGE = 36;
 const PLAYER_MOVE_SPEED = 52;
@@ -284,6 +295,10 @@ export function createInitialState(): GameState {
     playerZ: 0,
     playerYaw: -Math.PI / 2,
     playerPitch: -0.08,
+    playerMuzzleX: 80 + 96,
+    playerMuzzleY: TRACK_Y - WAGON_H - 13,
+    playerMuzzleZ: 0.5,
+    aimZ: ENEMY_DEPTH,
     weapon: 'pistol',
     weaponCooldown: 0,
     rifleMagazine: RIFLE_MAGAZINE_SIZE,
@@ -356,6 +371,10 @@ export function initRun(state: GameState): void {
   state.playerZ = 0;
   state.playerYaw = -Math.PI / 2;
   state.playerPitch = -0.08;
+  state.playerMuzzleX = state.trainX + state.playerX;
+  state.playerMuzzleY = TRACK_Y - WAGON_H - 13;
+  state.playerMuzzleZ = 0.5;
+  state.aimZ = ENEMY_DEPTH;
   state.weapon = 'pistol';
   state.weaponCooldown = 0;
   state.rifleMagazine = RIFLE_MAGAZINE_SIZE;
@@ -666,26 +685,20 @@ function firePlayerWeapon(state: GameState): void {
     return;
   }
 
-  const sourceX = state.trainX + state.playerX;
-  const sourceY = TRACK_Y - WAGON_H - 13;
-  let dx = state.mouseX - sourceX;
-  let dy = state.mouseY - sourceY;
-  const distance = Math.hypot(dx, dy);
-  if (distance < 1) {
-    dx = -Math.sin(state.playerYaw);
-    dy = 0;
-  } else {
-    dx /= distance;
-    dy /= distance;
-  }
-
+  const sourceX = state.playerMuzzleX;
+  const sourceY = state.playerMuzzleY;
   const rifle = state.weapon === 'rifle';
-  const speed = rifle ? 520 : 390;
+  const speed = rifle ? 26 : 19.5;
+  const velocity = getShotVelocity(
+    sourceX, sourceY, state.playerMuzzleZ,
+    state.mouseX, state.mouseY, state.aimZ,
+    speed,
+  );
   state.projectiles.push({
     x: sourceX,
     y: sourceY,
-    vx: dx * speed,
-    vy: dy * speed,
+    z: state.playerMuzzleZ,
+    ...velocity,
     radius: rifle ? 4 : 2,
     damage: rifle ? RIFLE_DAMAGE : PISTOL_DAMAGE,
     alive: true,
@@ -710,7 +723,7 @@ function updateMountedTurrets(state: GameState, dt: number): void {
     if (wagon.turretReload > 0) continue;
 
     const sourceX = state.trainX + wagon.x + wagon.width / 2;
-    const sourceY = wagon.y - 7;
+    const sourceY = GROUND_Y - (TURRET_PIVOT_HEIGHT - 0.16) / WORLD_SCALE;
     let target: Enemy | undefined;
     let closestDistance = 280;
     for (const enemy of state.enemies) {
@@ -726,15 +739,37 @@ function updateMountedTurrets(state: GameState, dt: number): void {
     }
 
     if (!target) continue;
-    const dx = target.x + target.width / 2 - sourceX;
-    const dy = target.y + target.height / 2 - sourceY;
-    const angle = Math.atan2(dy, dx);
-    wagon.turretAngle = angle;
+    const targetX = target.x + target.width / 2;
+    const targetY = target.y + target.height / 2;
+    const targetWorldX = (targetX - CANVAS_W / 2) * WORLD_SCALE;
+    const targetWorldY = (GROUND_Y - targetY) * WORLD_SCALE + 0.16;
+    const pivotWorldX = (sourceX - CANVAS_W / 2) * WORLD_SCALE;
+    let barrelAngle = Math.atan2(targetWorldY - TURRET_PIVOT_HEIGHT, targetWorldX - pivotWorldX);
+
+    for (let i = 0; i < 3; i++) {
+      const muzzleX = pivotWorldX
+        + TURRET_MUZZLE_X * Math.cos(barrelAngle)
+        - TURRET_MUZZLE_Y * Math.sin(barrelAngle);
+      const muzzleY = TURRET_PIVOT_HEIGHT
+        + TURRET_MUZZLE_X * Math.sin(barrelAngle)
+        + TURRET_MUZZLE_Y * Math.cos(barrelAngle);
+      barrelAngle = Math.atan2(targetWorldY - muzzleY, targetWorldX - muzzleX);
+    }
+
+    const muzzleWorldX = pivotWorldX
+      + TURRET_MUZZLE_X * Math.cos(barrelAngle)
+      - TURRET_MUZZLE_Y * Math.sin(barrelAngle);
+    const muzzleWorldY = TURRET_PIVOT_HEIGHT
+      + TURRET_MUZZLE_X * Math.sin(barrelAngle)
+      + TURRET_MUZZLE_Y * Math.cos(barrelAngle);
+    const muzzleX = muzzleWorldX / WORLD_SCALE + CANVAS_W / 2;
+    const muzzleY = GROUND_Y - (muzzleWorldY - 0.16) / WORLD_SCALE;
+    wagon.turretAngle = -barrelAngle;
     state.projectiles.push({
-      x: sourceX,
-      y: sourceY,
-      vx: Math.cos(angle) * 420,
-      vy: Math.sin(angle) * 420,
+      x: muzzleX,
+      y: muzzleY,
+      z: 0,
+      ...getShotVelocity(muzzleX, muzzleY, 0, targetX, targetY, ENEMY_DEPTH, 21),
       radius: 4,
       damage: state.turretDamage,
       alive: true,
@@ -743,6 +778,27 @@ function updateMountedTurrets(state: GameState, dt: number): void {
     });
     wagon.turretReload = state.turretMaxReload;
   }
+}
+
+function getShotVelocity(
+  sourceX: number,
+  sourceY: number,
+  sourceZ: number,
+  targetX: number,
+  targetY: number,
+  targetZ: number,
+  speed: number,
+): Pick<Projectile, 'vx' | 'vy' | 'vz'> {
+  const dx = (targetX - sourceX) * WORLD_SCALE;
+  const dy = -(targetY - sourceY) * WORLD_SCALE;
+  const dz = targetZ - sourceZ;
+  const distance = Math.hypot(dx, dy, dz);
+  if (distance < 0.0001) return { vx: 0, vy: 0, vz: 0 };
+  return {
+    vx: dx / distance * speed / WORLD_SCALE,
+    vy: -dy / distance * speed / WORLD_SCALE,
+    vz: dz / distance * speed,
+  };
 }
 
 function updateSpawning(state: GameState, dt: number): void {
@@ -995,9 +1051,13 @@ function updateProjectiles(state: GameState, dt: number): void {
   for (const p of state.projectiles) {
     if (!p.alive) continue;
 
+    const previousX = p.x;
+    const previousY = p.y;
+    const previousZ = p.z;
     p.x += p.vx * dt;
     p.y += p.vy * dt;
-    p.vy += 50 * dt; // gravity
+    p.z += p.vz * dt;
+    if (p.type !== 'bullet' && p.type !== 'turret') p.vy += 50 * dt;
 
     // Trail
     p.trail.push({ x: p.x, y: p.y });
@@ -1006,11 +1066,39 @@ function updateProjectiles(state: GameState, dt: number): void {
     // Check collision with enemies
     for (const e of state.enemies) {
       if (!e.alive) continue;
-      const dx = p.x - (e.x + e.width / 2);
-      const dy = p.y - (e.y + e.height / 2);
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist < e.width / 2 + p.radius) {
+      const enemyX = e.x + e.width / 2;
+      const enemyY = e.y + e.height / 2;
+      let collisionFraction = 1;
+      let hit: boolean;
+      if (p.type === 'bullet' || p.type === 'turret') {
+        const segmentX = (p.x - previousX) * WORLD_SCALE;
+        const segmentY = -(p.y - previousY) * WORLD_SCALE;
+        const segmentZ = p.z - previousZ;
+        const targetX = (enemyX - previousX) * WORLD_SCALE;
+        const targetY = -(enemyY - previousY) * WORLD_SCALE;
+        const targetZ = ENEMY_DEPTH - previousZ;
+        const segmentLengthSquared = segmentX ** 2 + segmentY ** 2 + segmentZ ** 2;
+        collisionFraction = segmentLengthSquared > 0
+          ? Math.max(0, Math.min(1, (targetX * segmentX + targetY * segmentY + targetZ * segmentZ) / segmentLengthSquared))
+          : 0;
+        const missX = targetX - segmentX * collisionFraction;
+        const missY = targetY - segmentY * collisionFraction;
+        const missZ = targetZ - segmentZ * collisionFraction;
+        const hitRadius = Math.hypot(e.width, e.height) * WORLD_SCALE / 2 + p.radius * WORLD_SCALE;
+        hit = Math.hypot(missX, missY, missZ) <= hitRadius;
+      } else {
+        const dx = p.x - enemyX;
+        const dy = p.y - enemyY;
+        hit = Math.hypot(dx, dy) < e.width / 2 + p.radius;
+      }
+
+      if (hit) {
         p.alive = false;
+        if (p.type === 'bullet' || p.type === 'turret') {
+          p.x = previousX + (p.x - previousX) * collisionFraction;
+          p.y = previousY + (p.y - previousY) * collisionFraction;
+          p.z = previousZ + (p.z - previousZ) * collisionFraction;
+        }
         e.hp -= p.damage;
         if (p.type === 'explosive') {
           explodeAt(state, p.x, p.y, 30);
@@ -1163,45 +1251,6 @@ function detachWagon(state: GameState, w: Wagon): void {
 
   // Explosion
   explodeAt(state, state.trainX + w.x + w.width / 2, w.y + w.height / 2, 40);
-}
-
-function shootTurret(state: GameState): void {
-  const turretWagon = state.wagons.find(w => w.type === 'turret' && !w.detached);
-  if (!turretWagon) return;
-
-  const turretX = state.trainX + turretWagon.x + turretWagon.width / 2;
-  const turretY = turretWagon.y - 5;
-  const speed = 300;
-
-  state.projectiles.push({
-    x: turretX + Math.cos(state.turretAngle) * 15,
-    y: turretY + Math.sin(state.turretAngle) * 15,
-    vx: Math.cos(state.turretAngle) * speed,
-    vy: Math.sin(state.turretAngle) * speed,
-    radius: 4,
-    damage: state.turretDamage,
-    alive: true,
-    trail: [],
-    type: state.act >= 3 ? 'explosive' : 'bullet',
-  });
-
-  state.turretReload = state.turretMaxReload;
-  addShake(state, 3, 0.15);
-
-  // Muzzle flash
-  for (let i = 0; i < 8; i++) {
-    state.particles.push({
-      x: turretX + Math.cos(state.turretAngle) * 18,
-      y: turretY + Math.sin(state.turretAngle) * 18,
-      vx: Math.cos(state.turretAngle) * 100 + (Math.random() - 0.5) * 60,
-      vy: Math.sin(state.turretAngle) * 100 + (Math.random() - 0.5) * 60,
-      life: 0.2 + Math.random() * 0.2,
-      maxLife: 0.3,
-      color: C.fire3,
-      size: 3 + Math.random() * 3,
-      type: 'spark',
-    });
-  }
 }
 
 function explodeAt(state: GameState, x: number, y: number, radius: number): void {
